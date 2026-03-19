@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: bengali-transcription-qc
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python optimized_qc_fixed_final.py
+    envVars:
+      - key: PORT
+        value: 10000
