@@ -277,9 +277,13 @@ def validate(data):
                 "problem":f"Segment [{ci}] start \"{c_start}\" is before Segment [{pi}] start \"{p_start}\" — out of order.",
                 "fix":f"Re-order segments chronologically. Segment [{ci}] should come before Segment [{pi}]."})
         elif c_start_sec < p_end_sec:
-            issues.append({"level":"ERROR","category":"LOGICAL","segment":ci,"field":"start",
-                "problem":f"Segment [{ci}] starts at \"{c_start}\" but Segment [{pi}] doesn't end until \"{p_end}\" — overlap.",
-                "fix":f"Change start of Segment [{ci}] to \"{p_end}\" or later, or fix the end of Segment [{pi}]."})
+            overlap_secs = p_end_sec - c_start_sec
+            issues.append({"level":"WARNING","category":"LOGICAL","segment":ci,"field":"start",
+                "problem":f"Segment [{ci}] starts at \"{c_start}\" but Segment [{pi}] doesn't end until \"{p_end}\" — overlap of {overlap_secs} second(s). "
+                          f"This usually means the transcription text needs correction.",
+                "fix":f"Listen to the audio carefully around this point and correct the Bengali text "
+                      f"of Segment [{pi}] and Segment [{ci}] accordingly. "
+                      f"Do not just adjust the timestamps — fix the actual transcription text."})
 
     # ── Speaker alternation check ────────────────────────────────
     # Rule: consecutive segments must not have the same speaker
@@ -404,20 +408,13 @@ INVISIBLE_CHARS = {
 
 def auto_fix_segments(data):
     """
-    Apply ONLY safe, non-transcription fixes to each segment.
+    Detect issues that were previously auto-fixed and report them as ERRORs.
+    This ensures QC members must correct the file themselves and cannot
+    accidentally submit the original unfixed file after seeing a PASS.
 
-    What it fixes:
-      1. Wrong-case keys       e.g. "Speaker" → "speaker", "Start" → "start"
-      2. Invisible unicode     e.g. zero-width spaces, BOM, non-breaking spaces
-                               These are genuinely not part of transcription —
-                               they are invisible characters that sneak in from
-                               copy-paste and break downstream processing.
-
-    What it NEVER touches:
-      - start / end timestamps
-      - speaker labels
-      - actual text content including spaces, punctuation, newlines
-        (these are transcription decisions made by the QC team)
+    What it detects (reports as ERROR, still fixes internally for further checks):
+      1. Wrong-case keys   e.g. "Speaker" must be "speaker", "Start" must be "start"
+      2. Invisible unicode  e.g. zero-width spaces, BOM etc. in text field
     """
     import copy
     fixed = copy.deepcopy(data)
@@ -426,8 +423,6 @@ def auto_fix_segments(data):
     if not isinstance(fixed, list):
         return fixed, fixes
 
-    # Truly invisible characters — not part of any transcription
-    # These have zero visual representation and only cause problems
     INVISIBLE_CHARS = {
         0x200B: "zero-width space",
         0x200C: "zero-width non-joiner",
@@ -439,17 +434,23 @@ def auto_fix_segments(data):
         if not isinstance(seg, dict):
             continue
 
-        # Fix 1: wrong-case keys (Speaker → speaker, Start → start etc.)
+        # Detect 1: wrong-case keys
         for key in ("start", "end", "speaker", "text"):
             if key not in seg:
                 wrong = next((k for k in seg if k.lower() == key), None)
                 if wrong:
-                    seg[key] = seg.pop(wrong)
-                    fixes.append({"segment": i, "field": key,
-                                  "what": f"Renamed key '{wrong}' → '{key}'"})
+                    seg[key] = seg.pop(wrong)  # fix internally so other checks work
+                    fixes.append({
+                        "segment":  i,
+                        "field":    key,
+                        "what":     f"Renamed key '{wrong}' to '{key}'",
+                        "level":    "ERROR",
+                        "category": "STRUCTURAL",
+                        "problem":  f"Key written as '{wrong}' instead of '{key}' in Segment [{i}].",
+                        "fix":      f"Rename '{wrong}' to '{key}' (must be all lowercase)."
+                    })
 
-        # Fix 2: truly invisible unicode characters in text
-        # (zero-width space, BOM etc. — completely invisible, never intentional)
+        # Detect 2: invisible unicode characters in text
         if "text" in seg and isinstance(seg["text"], str):
             original = seg["text"]
             cleaned  = ""
@@ -460,9 +461,18 @@ def auto_fix_segments(data):
                 else:
                     cleaned += ch
             if removed:
-                seg["text"] = cleaned
-                fixes.append({"segment": i, "field": "text",
-                              "what": f"Removed invisible chars: {', '.join(sorted(removed))}"})
+                seg["text"] = cleaned  # fix internally so other checks work
+                fixes.append({
+                    "segment":  i,
+                    "field":    "text",
+                    "what":     f"Removed invisible chars: {', '.join(sorted(removed))}",
+                    "level":    "ERROR",
+                    "category": "CONTENT",
+                    "problem":  f"Segment [{i}] text contains invisible characters: {', '.join(sorted(removed))}. "
+                                f"These hidden characters sneak in from copy-paste and break processing.",
+                    "fix":      f"Go to Segment [{i}] and retype the text manually. "
+                                f"Do not copy-paste from external sources like Word or Google Docs."
+                })
 
     # Reorder keys to standard order: start, end, speaker, text
     KEY_ORDER = ["start", "end", "speaker", "text"]
@@ -527,11 +537,26 @@ def check_source(source):
             "warning_count":0,
         }
 
-    # ── Auto-fix trivial issues before validation ───────────────
+    # ── Detect issues (wrong-case keys, invisible chars) ────────
     fixed_data, auto_fixes = auto_fix_segments(data)
 
+    # ── Inject auto-fix detections as ERRORs into issues list ───
+    # These must cause FAIL so QC members are forced to correct manually
+    auto_fix_issues = [
+        {
+            "level":    fix["level"],
+            "category": fix["category"],
+            "segment":  fix["segment"],
+            "field":    fix["field"],
+            "problem":  fix["problem"],
+            "fix":      fix["fix"],
+        }
+        for fix in auto_fixes
+        if "level" in fix
+    ]
+
     # ── Run full validation on the fixed data ────────────────────
-    issues  = validate(fixed_data)
+    issues  = auto_fix_issues + validate(fixed_data)
     errors  = [x for x in issues if x["level"] == "ERROR"]
     total   = len(fixed_data) if isinstance(fixed_data, list) else 0
 
