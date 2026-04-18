@@ -49,8 +49,8 @@ _fixed_cache = {}  # filename → fixed_data JSON string
 # ─────────────────────────────────────────────────────────────────
 
 REQUIRED_KEYS     = {"start", "end", "speaker", "text"}
-TIMESTAMP_PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}$")
-TIMESTAMP_LOOSE   = re.compile(r"^\d{1,2}:\d{2}:\d{2}$")
+TIMESTAMP_PATTERN = re.compile(r"^[0-9]{2}:[0-9]{2}:[0-9]{2}$")
+TIMESTAMP_LOOSE   = re.compile(r"^[0-9]{1,2}:[0-9]{2}:[0-9]{2}$")
 BENGALI_RANGE     = re.compile(r"[\u0980-\u09FF]")
 GDRIVE_FILE_RE    = re.compile(r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)")
 GDRIVE_ID_RE      = re.compile(r"id=([a-zA-Z0-9_-]+)")
@@ -273,7 +273,7 @@ def validate(data):
         c_start_sec = ts_to_seconds(c_start)
         p_start_sec = ts_to_seconds(p_start)
         if c_start_sec < p_start_sec:
-            issues.append({"level":"ERROR","category":"LOGICAL","segment":ci,"field":"start",
+            issues.append({"level":"WARNING","category":"LOGICAL","segment":ci,"field":"start",
                 "problem":f"Segment [{ci}] start \"{c_start}\" is before Segment [{pi}] start \"{p_start}\" — out of order.",
                 "fix":f"Re-order segments chronologically. Segment [{ci}] should come before Segment [{pi}]."})
         elif c_start_sec < p_end_sec:
@@ -1842,28 +1842,6 @@ if __name__ == "__main__":
         t = threading.Thread(target=keep_alive, daemon=True)
         t.start()
         print("  ✓  Keep-alive enabled (server will not sleep)")
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n  Server stopped.")
-    if not HAS_OPENPYXL:
-        print("  ⚠  Excel reports disabled. Run:  pip install openpyxl")
-    if not HAS_REPORTLAB:
-        print("  ⚠  PDF reports disabled.   Run:  pip install reportlab")
-    print()
-    def keep_alive():
-        """Ping the server every 30 seconds to prevent ngrok tunnel sleeping."""
-        while True:
-            time.sleep(30)
-            try:
-                import urllib.request
-                urllib.request.urlopen(f"http://localhost:{PORT}/ping", timeout=5)
-            except Exception:
-                pass
-
-    t = threading.Thread(target=keep_alive, daemon=True)
-    t.start()
 
     try:
         server.serve_forever()
