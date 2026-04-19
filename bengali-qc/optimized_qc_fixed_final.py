@@ -272,11 +272,7 @@ def validate(data):
         p_end_sec   = ts_to_seconds(p_end)
         c_start_sec = ts_to_seconds(c_start)
         p_start_sec = ts_to_seconds(p_start)
-        if c_start_sec < p_start_sec:
-            issues.append({"level":"WARNING","category":"LOGICAL","segment":ci,"field":"start",
-                "problem":f"Segment [{ci}] start \"{c_start}\" is before Segment [{pi}] start \"{p_start}\" — out of order.",
-                "fix":f"Re-order segments chronologically. Segment [{ci}] should come before Segment [{pi}]."})
-        elif c_start_sec < p_end_sec:
+        if c_start_sec < p_end_sec and c_start_sec >= p_start_sec:
             overlap_secs = p_end_sec - c_start_sec
             issues.append({"level":"WARNING","category":"LOGICAL","segment":ci,"field":"start",
                 "problem":f"Segment [{ci}] starts at \"{c_start}\" but Segment [{pi}] doesn't end until \"{p_end}\" — overlap of {overlap_secs} second(s). "
@@ -1233,6 +1229,30 @@ HTML = r"""<!DOCTYPE html>
     font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
     color:var(--muted);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);
   }
+
+  /* ── Error / Warning level blocks ── */
+  .level-block {
+    margin-top:14px;
+    border:1px solid var(--border);
+    border-radius:8px;
+    overflow:hidden;
+  }
+  .error-block { border-color:rgba(239,68,68,.3); }
+  .warn-block  { border-color:rgba(245,158,11,.3); }
+  .level-heading {
+    display:flex; align-items:center; gap:8px;
+    padding:9px 14px;
+    font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+  }
+  .error-heading { background:rgba(239,68,68,.12); color:var(--fail); }
+  .warn-heading  { background:rgba(245,158,11,.10); color:var(--warn); }
+  .level-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .level-count {
+    background:rgba(255,255,255,.1);
+    padding:1px 7px; border-radius:10px;
+    font-size:11px; font-weight:700;
+  }
+  .level-block .issue-row { padding:10px 14px; }
   .issue-row {
     display:grid;grid-template-columns:90px 80px 1fr;gap:8px;
     padding:10px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px;line-height:1.5;
@@ -1545,21 +1565,13 @@ function buildBody(data) {
     if (!data.json_error && !(data.auto_fixes && data.auto_fixes.length)) return '';
   }
 
-  const cats = {
-    STRUCTURAL: { label: 'Structural Errors — broken JSON format',    items: [] },
-    LOGICAL:    { label: 'Logical Errors — valid JSON but wrong data', items: [] },
-    CONTENT:    { label: 'Content Issues — text and speaker',          items: [] },
-  };
-  for (const iss of (data.issues || [])) {
-    if (cats[iss.category]) cats[iss.category].items.push(iss);
-  }
+  const allIssues  = data.issues || [];
+  const errors     = allIssues.filter(i => i.level === 'ERROR');
+  const warnings   = allIssues.filter(i => i.level === 'WARNING');
 
-  for (const [, cat] of Object.entries(cats)) {
-    if (!cat.items.length) continue;
-    html += `<div class="cat-group"><div class="cat-label">${cat.label}</div>`;
-    for (const iss of cat.items) {
-      const seg = iss.segment != null ? `Seg [${iss.segment}]` : 'Global';
-      html += `
+  function renderIssueRow(iss) {
+    const seg = iss.segment != null ? `Seg [${iss.segment}]` : 'Global';
+    return `
       <div class="issue-row">
         <div class="issue-seg"><span class="err-dot ${iss.level}"></span>${escHtml(seg)}</div>
         <div class="issue-field">${escHtml(iss.field)}</div>
@@ -1568,16 +1580,38 @@ function buildBody(data) {
           <div class="issue-fix">${escHtml(iss.fix)}</div>
         </div>
       </div>`;
-    }
+  }
+
+  // ── ERRORS section (red) ─────────────────────────────────────
+  if (errors.length) {
+    html += `<div class="level-block error-block">
+      <div class="level-heading error-heading">
+        <span class="level-dot" style="background:var(--fail)"></span>
+        ERRORS &nbsp;<span class="level-count">${errors.length}</span>
+      </div>`;
+    for (const iss of errors) html += renderIssueRow(iss);
+    html += `</div>`;
+  }
+
+  // ── WARNINGS section (yellow) ────────────────────────────────
+  if (warnings.length) {
+    html += `<div class="level-block warn-block">
+      <div class="level-heading warn-heading">
+        <span class="level-dot" style="background:var(--warn)"></span>
+        WARNINGS &nbsp;<span class="level-count">${warnings.length}</span>
+      </div>`;
+    for (const iss of warnings) html += renderIssueRow(iss);
     html += `</div>`;
   }
 
   // ── Auto-corrected section ────────────────────────────────────
   const autoFixes = data.auto_fixes || [];
   if (autoFixes.length) {
-    html += `<div class="cat-group">
-      <div class="cat-label" style="color:#34d399;border-color:rgba(52,211,153,.25)">
-        ⚡ Auto-Corrected (${autoFixes.length}) — already fixed, baked into ⬇ Fixed JSON
+    html += `<div class="level-block" style="border-color:rgba(52,211,153,.25)">
+      <div class="level-heading" style="color:#34d399">
+        <span class="level-dot" style="background:#34d399"></span>
+        ⚡ AUTO-CORRECTED &nbsp;<span class="level-count">${autoFixes.length}</span>
+        <span style="font-weight:400;font-size:10px;margin-left:6px">— already fixed, baked into ⬇ Fixed JSON</span>
       </div>`;
     for (const fx of autoFixes) {
       const seg = fx.segment != null ? `Seg [${fx.segment}]` : 'Global';
