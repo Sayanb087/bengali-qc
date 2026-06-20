@@ -49,8 +49,8 @@ _fixed_cache = {}  # filename → fixed_data JSON string
 # ─────────────────────────────────────────────────────────────────
 
 REQUIRED_KEYS     = {"start", "end", "speaker", "text"}
-TIMESTAMP_PATTERN = re.compile(r"^[0-9]{2}:[0-9]{2}:[0-9]{2}$")
-TIMESTAMP_LOOSE   = re.compile(r"^[0-9]{1,2}:[0-9]{2}:[0-9]{2}$")
+TIMESTAMP_PATTERN = re.compile(r"^[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?$")
+TIMESTAMP_LOOSE   = re.compile(r"^[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?$")
 BENGALI_RANGE     = re.compile(r"[\u0980-\u09FF]")
 GDRIVE_FILE_RE    = re.compile(r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)")
 GDRIVE_ID_RE      = re.compile(r"id=([a-zA-Z0-9_-]+)")
@@ -98,8 +98,8 @@ def download_from_drive(url):
         return None, None, str(ex)
 
 def ts_to_seconds(ts):
-    h, m, s = map(int, ts.split(":"))
-    return h * 3600 + m * 60 + s
+    h, m, s = ts.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
 
 def is_valid_ts(ts):
     return isinstance(ts, str) and bool(TIMESTAMP_PATTERN.match(ts))
@@ -176,7 +176,9 @@ def validate(data):
                         "problem":f"'{ts_field}' \"{val}\" is not a valid timestamp.",
                         "fix":"Use format HH:MM:SS e.g. \"00:01:35\"."})
                 continue
-            mm, ss = int(val.split(":")[1]), int(val.split(":")[2])
+            parts = val.split(":")
+            mm = int(parts[1])
+            ss = int(parts[2].split(".")[0])   # whole seconds only, ignore .mmm
             if mm > 59 or ss > 59:
                 issues.append({"level":"ERROR","category":"LOGICAL","segment":i,"field":ts_field,
                     "problem":f"'{ts_field}' \"{val}\" has impossible values (MM/SS must be 0–59).",
@@ -185,10 +187,16 @@ def validate(data):
         s, e = seg.get("start"), seg.get("end")
         if is_valid_ts(s) and is_valid_ts(e):
             ss2, es = ts_to_seconds(s), ts_to_seconds(e)
+            has_ms  = ("." in s) or ("." in e)   # millisecond-precision timestamps
             if ss2 > es:
                 issues.append({"level":"ERROR","category":"LOGICAL","segment":i,"field":"start/end",
                     "problem":f"start \"{s}\" is after end \"{e}\" — timestamps are reversed.",
                     "fix":"Swap the start and end values, or correct whichever is wrong."})
+            elif has_ms:
+                if es <= ss2:
+                    issues.append({"level":"ERROR","category":"LOGICAL","segment":i,"field":"start/end",
+                        "problem":f"Segment has zero duration (start \"{s}\" = end \"{e}\").",
+                        "fix":"Make sure end is later than start."})
             elif (es - ss2) < 1:
                 issues.append({"level":"ERROR","category":"LOGICAL","segment":i,"field":"start/end",
                     "problem":f"Segment duration less than 1 second (start \"{s}\" → end \"{e}\"). Minimum is 1 second.",
@@ -273,7 +281,7 @@ def validate(data):
         c_start_sec = ts_to_seconds(c_start)
         p_start_sec = ts_to_seconds(p_start)
         if c_start_sec < p_end_sec and c_start_sec >= p_start_sec:
-            overlap_secs = p_end_sec - c_start_sec
+            overlap_secs = round(p_end_sec - c_start_sec, 3)
             issues.append({"level":"WARNING","category":"LOGICAL","segment":ci,"field":"start",
                 "problem":f"Segment [{ci}] starts at \"{c_start}\" but Segment [{pi}] doesn't end until \"{p_end}\" — overlap of {overlap_secs} second(s). "
                           f"This usually means the transcription text needs correction.",
